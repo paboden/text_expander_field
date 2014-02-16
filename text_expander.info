@@ -1,0 +1,8 @@
+name = text expander
+description = Creates a new field type with an expanding textarea field with an optional label field.
+package = Core
+version = VERSION
+core = 7.x
+dependencies[] = field
+
+scripts[] = text_expander.js

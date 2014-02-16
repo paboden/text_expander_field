@@ -1,0 +1,494 @@
+<?php
+
+/**
+ * @file
+ * Defines simple expandable text field and allows for a label.
+ */
+
+/**
+ * Implements hook_help().
+ */
+function text_expander_help($path, $arg) {
+  switch ($path) {
+    case 'admin/help#text_expander':
+      $output = '';
+      $output .= '<h3>' . t('About') . '</h3>';
+      $output .= '<p>' . t("TODO", array('@link' => url('admin/'), '@link2' => url('admin/help'))) . '</p>';
+      return $output;
+  }
+}
+
+/**
+ * Implements hook_field_info().
+ *
+ * Instance settings:
+ *   - text_processing: whether text input filters should be used.
+ *   - display_label: whether the label field should be displayed.
+ */
+function text_expander_field_info() {
+  return array(
+    'text_expander_with_label' => array(
+      'label' => t('Expanding text and label'),
+      'description' => t('This field stores expandable long text in the database along with optional label.'),
+      'instance_settings' => array('text_processing' => 1, 'display_label' => 1),
+      'default_widget' => 'text_expander_textarea_with_label',
+      'default_formatter' => 'text_expander_default',
+    ),
+  );
+}
+
+/**
+ * Implements hook_field_settings_form().
+ */
+function text_expander_field_settings_form($field, $instance, $has_data) {
+  $settings = $field['settings'];
+
+  $form = array();
+
+  if ($field['type'] == 'text') {
+    $form['max_length'] = array(
+      '#type' => 'textfield',
+      '#title' => t('Maximum length'),
+      '#default_value' => $settings['max_length'],
+      '#required' => TRUE,
+      '#description' => t('The maximum length of the field in characters.'),
+      '#element_validate' => array('element_validate_integer_positive'),
+      // @todo: If $has_data, add a validate handler that only allows
+      // max_length to increase.
+      '#disabled' => $has_data,
+    );
+  }
+
+  return $form;
+}
+
+/**
+ * Implements hook_field_instance_settings_form().
+ */
+function text_expander_field_instance_settings_form($field, $instance) {
+  $settings = $instance['settings'];
+
+  $form['text_processing'] = array(
+    '#type' => 'radios',
+    '#title' => t('Text processing'),
+    '#default_value' => $settings['text_processing'],
+    '#options' => array(
+      t('Plain text'),
+      t('Filtered text (user selects text format)'),
+    ),
+  );
+  if ($field['type'] == 'text_expander_with_label') {
+    $form['display_label'] = array(
+      '#type' => 'checkbox',
+      '#title' => t('Add label'),
+      '#default_value' => $settings['display_label'],
+      '#description' => t('This allows authors to input an explicit label, to be displayed along with each individual expanding textarea.'),
+    );
+  }
+
+  return $form;
+}
+
+/**
+ * Implements hook_field_validate().
+ *
+ * Possible error codes:
+ * - 'text_expander_value_max_length': The value exceeds the maximum length.
+ * - 'text_expander_label_max_length': The summary exceeds the maximum length.
+ */
+function text_expander_field_validate($entity_type, $entity, $field, $instance, $langcode, $items, &$errors) {
+  foreach ($items as $delta => $item) {
+    // @todo Length is counted separately for summary and value, so the maximum
+    //   length can be exceeded very easily.
+    foreach (array('value', 'label') as $column) {
+      if (!empty($item[$column])) {
+        if (!empty($field['settings']['max_length']) && drupal_strlen($item[$column]) > $field['settings']['max_length']) {
+          switch ($column) {
+            case 'value':
+              $message = t('%name: the text may not be longer than %max characters.', array('%name' => $instance['label'], '%max' => $field['settings']['max_length']));
+              break;
+
+            case 'label':
+              $message = t('%name: the label may not be longer than %max characters.', array('%name' => $instance['label'], '%max' => $field['settings']['max_length']));
+              break;
+          }
+          $errors[$field['field_name']][$langcode][$delta][] = array(
+            'error' => "text_{$column}_length",
+            'message' => $message,
+          );
+        }
+      }
+    }
+  }
+}
+
+/**
+ * Implements hook_field_load().
+ *
+ * Where possible, generate the sanitized version of each field early so that
+ * it is cached in the field cache. This avoids looking up from the filter cache
+ * separately.
+ *
+ * @see text_field_formatter_view()
+ */
+function text_expander_field_load($entity_type, $entities, $field, $instances, $langcode, &$items) {
+  foreach ($entities as $id => $entity) {
+    foreach ($items[$id] as $delta => $item) {
+      // Only process items with a cacheable format, the rest will be handled
+      // by formatters if needed.
+      if (empty($instances[$id]['settings']['text_processing']) || filter_format_allowcache($item['format'])) {
+        $items[$id][$delta]['safe_value'] = isset($item['value']) ? _text_expander_sanitize($instances[$id], $langcode, $item, 'value') : '';
+        if ($field['type'] == 'text_expander_with_label') {
+          $items[$id][$delta]['safe_label'] = isset($item['label']) ? _text_expander_sanitize($instances[$id], $langcode, $item, 'label') : '';
+        }
+      }
+    }
+  }
+}
+
+/**
+ * Implements hook_field_is_empty().
+ */
+function text_expander_field_is_empty($item, $field) {
+  if (!isset($item['value']) || $item['value'] === '') {
+    return !isset($item['label']) || $item['label'] === '';
+  }
+  return FALSE;
+}
+
+/**
+ * Implements hook_field_formatter_info().
+ */
+function text_expander_field_formatter_info() {
+  return array(
+    'text_expander' => array(
+      'label' => t('Expanding text'),
+      'field types' => array('text_expander_with_label'),
+      'settings' => array(
+        // Add default settings with text, so we can wrap them in t().
+        'expandText' => t('Expand') . ' »',
+        'expandPrefix' => '...',
+        'collapseTimer' => FALSE,
+        'slicePoint' => 50,
+        'userCollapseText' => t('Collapse'),
+        'userCollapsePrefix' => '',
+        'widow' => 0,
+      ),
+    ),
+    'text_expander_with_label' => array(
+      'label' => t('Expanding text with label'),
+      'field types' => array('text_expander_with_label'),
+      'settings' => array(
+        // Add default settings with text, so we can wrap them in t().
+        'expandText' => t('Expand') . ' »',
+        'expandPrefix' => '...',
+        'collapseTimer' => FALSE,
+        'slicePoint' => 50,
+        'userCollapseText' => t('Collapse'),
+        'userCollapsePrefix' => '',
+        'widow' => 0,
+      ),
+    ),
+  );
+}
+
+/**
+ * Implements hook_field_formatter_settings_form().
+ */
+function text_expander_field_formatter_settings_form($field, $instance, $view_mode, $form, &$form_state) {
+  $display = $instance['display'][$view_mode];
+  $settings = $display['settings'];
+
+  $element = array();
+
+  if (strpos($display['type'], '_trimmed') !== FALSE) {
+    $element['trim_length'] = array(
+      '#title' => t('Trim length'),
+      '#type' => 'textfield',
+      '#size' => 10,
+      '#default_value' => $settings['trim_length'],
+      '#element_validate' => array('element_validate_integer_positive'),
+      '#required' => TRUE,
+    );
+  }
+
+  $element['expandText'] = array(
+    '#type' => 'textfield',
+    '#title' => t('Expand text'),
+    '#description' => t('Text displayed in a link instead of the hidden part of the element. Clicking this will expand/show the hidden/collapsed text.'),
+    '#default_value' => $settings['expandText'],
+  );
+
+  $element['expandPrefix'] = array(
+    '#type' => 'textfield',
+    '#title' => t('Expand prefix'),
+    '#description' => t('Text to come before the expand link.'),
+    '#default_value' => $settings['expandPrefix'],
+  );
+
+  $element['slicePoint'] = array(
+    '#type' => 'textfield',
+    '#title' => t('Slice point'),
+    '#description' => t('Text size in characters before the expand link.'),
+    '#default_value' => $settings['slicePoint'],
+    '#element_validate' => array('_element_validate_integer_positive'),
+  );
+
+  $element['collapseTimer'] = array(
+    '#type' => 'textfield',
+    '#title' => t('Collapse timer'),
+    '#description' => t('Number of milliseconds after text has been expanded at which to collapse the text again.'),
+    '#default_value' => $settings['collapseTimer'],
+    '#element_validate' => array('_element_validate_integer_positive'),
+  );
+
+  $element['userCollapseText'] = array(
+    '#type' => 'textfield',
+    '#title' => t('Collapse text'),
+    '#description' => t('Text to use for the link to re-collapse the text.'),
+    '#default_value' => $settings['userCollapseText'],
+  );
+
+  $element['userCollapsePrefix'] = array(
+    '#type' => 'textfield',
+    '#title' => t('Collapse prefix'),
+    '#description' => t('Text to come before the re-collapse link.'),
+    '#default_value' => $settings['userCollapsePrefix'],
+  );
+
+  $element['widow'] = array(
+    '#type' => 'textfield',
+    '#title' => t('Widow'),
+    '#description' => t('A threshold of sorts for whether to initially hide/collapse part of the element\'s contents.<br/>If after slicing the contents in two there are fewer words in the second part than<br/>the value set by widow, we won\'t bother hiding/collapsing anything.<br/>If unsure, set to 0.'),
+    '#default_value' => $settings['widow'],
+  );
+
+  return $element;
+}
+
+/**
+ * Implements hook_field_formatter_settings_summary().
+ */
+function text_expander_field_formatter_settings_summary($field, $instance, $view_mode) {
+  $display = $instance['display'][$view_mode];
+  $settings = $display['settings'];
+
+  $summary = '';
+
+  if (strpos($display['type'], '_trimmed') !== FALSE) {
+    $summary = t('Trim length') . ': ' . $settings['trim_length'];
+  }
+  $summary .= '<br/>' . t('Expander set');
+
+  return $summary;
+}
+
+/**
+ * Implements hook_field_formatter_view().
+ */
+function text_expander_field_formatter_view($entity_type, $entity, $field, $instance, $langcode, $items, $display) {
+  $element = array();
+  static $delta = array();
+  $settings = $display['settings'];
+
+  switch ($display['type']) {
+
+    case 'text_expander_with_label':
+      foreach ($items as $delta => $item) {
+        if (!empty($item['label'])) {
+          $label = _text_expander_sanitize($instance, $langcode, $item, 'label');
+        }
+        $output = _text_expander_sanitize($instance, $langcode, $item, 'value');
+        $output = text_summary($output, $instance['settings']['text_processing'] ? $item['format'] : NULL);
+
+        $output = '<div class="text-expander-label">' . $label . '</div>' . '<div class="text-expander-body">' . $output . '</div>';
+
+        $element[$delta] = array('#markup' => $output);
+      }
+      break;
+
+    case 'text_expander':
+      foreach ($items as $delta => $item) {
+        $output = _text_expander_sanitize($instance, $langcode, $item, 'value');
+        $output = text_summary($output, $instance['settings']['text_processing'] ? $item['format'] : NULL);
+
+        $output = '<div class="text-expander-body">' . $output . '</div>';
+
+        $element[$delta] = array('#markup' => $output);
+
+      }
+      break;
+
+  }
+
+  $element[$delta]['#attached']['js'] = array(
+    drupal_get_path('module', 'text_expander') . '/text_expander.js' => array('type' => 'file', 'every_page' => TRUE),
+    libraries_get_path('jquery.expander') . '/jquery.expander.js' => array('type' => 'file'),
+    array('data' => array('textExpander' => array($delta => $settings)), 'type' => 'setting'),
+  );
+
+  return $element;
+}
+
+/**
+ * Sanitizes the 'value' or 'summary' data of a text value.
+ *
+ * Depending on whether the field instance uses text processing, data is run
+ * through check_plain() or check_markup().
+ *
+ * @param $instance
+ *   The instance definition.
+ * @param $langcode
+ *  The language associated to $item.
+ * @param $item
+ *   The field value to sanitize.
+ * @param $column
+ *   The column to sanitize (either 'value' or 'summary').
+ *
+ * @return
+ *  The sanitized string.
+ */
+function _text_expander_sanitize($instance, $langcode, $item, $column) {
+  // If the value uses a cacheable text format, text_field_load() precomputes
+  // the sanitized string.
+  if (isset($item["safe_$column"])) {
+    return $item["safe_$column"];
+  }
+  return $instance['settings']['text_processing'] ? check_markup($item[$column], $item['format'], $langcode) : check_plain($item[$column]);
+}
+
+/**
+ * Implements hook_field_widget_info().
+ */
+function text_expander_field_widget_info() {
+  return array(
+    'text_expander_textarea_with_label' => array(
+      'label' => t('Expanding text area with a label'),
+      'field types' => array('text_expander_with_label'),
+      'settings' => array('rows' => 10, 'label_rows' => 3),//may have to adjust for textfield
+    ),
+  );
+}
+
+/**
+ * Implements hook_field_widget_settings_form().
+ */
+function text_expander_field_widget_settings_form($field, $instance) {
+  $widget = $instance['widget'];
+  $settings = $widget['settings'];
+
+  $form['rows'] = array(
+    '#type' => 'textfield',
+    '#title' => t('Rows'),
+    '#default_value' => $settings['rows'],
+    '#required' => TRUE,
+    '#element_validate' => array('element_validate_integer_positive'),
+  );
+
+  return $form;
+}
+
+/**
+ * Implements hook_field_widget_form().
+ */
+function text_expander_field_widget_form(&$form, &$form_state, $field, $instance, $langcode, $items, $delta, $element) {
+  $summary_widget = array();
+  $main_widget = array();
+
+  switch ($instance['widget']['type']) {
+
+    case 'text_expander_textarea_with_label':
+      $display = !empty($items[$delta]['label']) || !empty($instance['settings']['display_label']);
+      $label_widget = array(
+        '#type' => $display ? 'textarea' : 'value',
+        '#default_value' => isset($items[$delta]['label']) ? $items[$delta]['label'] : NULL,
+        '#title' => t('Label'),
+        '#rows' => $instance['widget']['settings']['label_rows'],
+        '#description' => t('Custom label for body text.'),
+        '#attached' => array(
+          'js' => array(drupal_get_path('module', 'text_expander') . '/text_expander.js'),
+        ),
+        '#attributes' => array('class' => array('text-expander-label')),
+        '#prefix' => '<div class="text-expander-label-wrapper">',
+        '#suffix' => '</div>',
+        '#weight' => -10,
+      );
+      // Fall through to the next case.
+
+    case 'text_textarea':
+      $main_widget = $element + array(
+        '#type' => 'textarea',
+        '#default_value' => isset($items[$delta]['value']) ? $items[$delta]['value'] : NULL,
+        '#rows' => $instance['widget']['settings']['rows'],
+        '#attributes' => array('class' => array('text-full')),
+      );
+      break;
+  }
+
+  if ($main_widget) {
+    // Conditionally alter the form element's type if text processing is enabled.
+    if ($instance['settings']['text_processing']) {
+      $element = $main_widget;
+      $element['#type'] = 'text_format';
+      $element['#format'] = isset($items[$delta]['format']) ? $items[$delta]['format'] : NULL;
+      $element['#base_type'] = $main_widget['#type'];
+    }
+    else {
+      $element['value'] = $main_widget;
+    }
+  }
+  if ($label_widget) {
+    $element['label'] = $label_widget;
+  }
+
+  return $element;
+}
+
+/**
+ * Implements hook_field_widget_error().
+ */
+function text_expander_field_widget_error($element, $error, $form, &$form_state) {
+  switch ($error['error']) {
+    case 'text_summary_max_length':
+      $error_element = $element[$element['#columns'][1]];
+      break;
+
+    default:
+      $error_element = $element[$element['#columns'][0]];
+      break;
+  }
+
+  form_error($error_element, $error['message']);
+}
+
+/**
+ * Implements hook_field_prepare_translation().
+ */
+function text_expander_field_prepare_translation($entity_type, $entity, $field, $instance, $langcode, &$items, $source_entity, $source_langcode) {
+  // If the translating user is not permitted to use the assigned text format,
+  // we must not expose the source values.
+  $field_name = $field['field_name'];
+  if (!empty($source_entity->{$field_name}[$source_langcode])) {
+    $formats = filter_formats();
+    foreach ($source_entity->{$field_name}[$source_langcode] as $delta => $item) {
+      $format_id = $item['format'];
+      if (!empty($format_id) && !filter_access($formats[$format_id])) {
+        unset($items[$delta]);
+      }
+    }
+  }
+}
+
+/**
+ * Implements hook_filter_format_update().
+ */
+function text_expander_filter_format_update($format) {
+  field_cache_clear();
+}
+
+/**
+ * Implements hook_filter_format_disable().
+ */
+function text_expander_filter_format_disable($format) {
+  field_cache_clear();
+}
