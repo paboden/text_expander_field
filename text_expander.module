@@ -28,10 +28,10 @@ function text_expander_help($path, $arg) {
 function text_expander_field_info() {
   return array(
     'text_expander_with_label' => array(
-      'label' => t('Expanding text and label'),
+      'label' => t('Expanding text'),
       'description' => t('This field stores expandable long text in the database along with optional label.'),
       'instance_settings' => array('text_processing' => 1, 'display_label' => 1),
-      'default_widget' => 'text_expander_textarea_with_label',
+      'default_widget' => 'text_expander_textarea',
       'default_formatter' => 'text_expander_default',
     ),
   );
@@ -40,15 +40,16 @@ function text_expander_field_info() {
 /**
  * Implements hook_field_settings_form().
  */
+/*
 function text_expander_field_settings_form($field, $instance, $has_data) {
   $settings = $field['settings'];
 
   $form = array();
 
-  if ($field['type'] == 'text') {
-    $form['max_length'] = array(
+  if ($field['type'] == 'text_expander_with_label') {
+    $form['label_max_length'] = array(
       '#type' => 'textfield',
-      '#title' => t('Maximum length'),
+      '#title' => t('Label maximum length'),
       '#default_value' => $settings['max_length'],
       '#required' => TRUE,
       '#description' => t('The maximum length of the field in characters.'),
@@ -61,6 +62,7 @@ function text_expander_field_settings_form($field, $instance, $has_data) {
 
   return $form;
 }
+*/
 
 /**
  * Implements hook_field_instance_settings_form().
@@ -96,6 +98,7 @@ function text_expander_field_instance_settings_form($field, $instance) {
  * - 'text_expander_value_max_length': The value exceeds the maximum length.
  * - 'text_expander_label_max_length': The summary exceeds the maximum length.
  */
+/*
 function text_expander_field_validate($entity_type, $entity, $field, $instance, $langcode, $items, &$errors) {
   foreach ($items as $delta => $item) {
     // @todo Length is counted separately for summary and value, so the maximum
@@ -121,6 +124,7 @@ function text_expander_field_validate($entity_type, $entity, $field, $instance, 
     }
   }
 }
+*/
 
 /**
  * Implements hook_field_load().
@@ -161,7 +165,7 @@ function text_expander_field_is_empty($item, $field) {
  */
 function text_expander_field_formatter_info() {
   return array(
-    'text_expander' => array(
+    'text_expander_no_label' => array(
       'label' => t('Expanding text'),
       'field types' => array('text_expander_with_label'),
       'settings' => array(
@@ -295,26 +299,46 @@ function text_expander_field_formatter_view($entity_type, $entity, $field, $inst
 
     case 'text_expander_with_label':
       foreach ($items as $delta => $item) {
-        if (!empty($item['label'])) {
-          $label = _text_expander_sanitize($instance, $langcode, $item, 'label');
+        if (!empty($item['label']) && ($item['format'] == NULL)) {
+          $label = '<div class="text-expander-label"><p>' . _text_expander_sanitize($instance, $langcode, $item, 'label') . '</p></div>';
+        }
+        elseif (!empty($item['label'])) {
+          $label = '<div class="text-expander-label">' . _text_expander_sanitize($instance, $langcode, $item, 'label') . '</div>';
+        }
+        else {
+          $label = '<div class="text-expander-label-empty"></div>';
         }
         $output = _text_expander_sanitize($instance, $langcode, $item, 'value');
         $output = text_summary($output, $instance['settings']['text_processing'] ? $item['format'] : NULL);
 
-        $output = '<div class="text-expander-label">' . $label . '</div>' . '<div class="text-expander-body">' . $output . '</div>';
+        if ($item['format'] != NULL) {
+          $output = $label . '<div class="text-expander-body">' . $output . '</div>';
+        }
+        else {
+          $output = $label . '<div class="text-expander-body"><p>' . $output . '</p></div>';
+        }
 
-        $element[$delta] = array('#markup' => $output);
+        $element[$delta] = array(
+          '#markup' => $output,
+        );
       }
       break;
 
-    case 'text_expander':
+    case 'text_expander_no_label':
       foreach ($items as $delta => $item) {
         $output = _text_expander_sanitize($instance, $langcode, $item, 'value');
         $output = text_summary($output, $instance['settings']['text_processing'] ? $item['format'] : NULL);
 
-        $output = '<div class="text-expander-body">' . $output . '</div>';
+        if ($item['format'] != NULL) {
+          $output = '<div class="text-expander-body">' . $output . '</div>';
+        }
+        else {
+          $output = '<div class="text-expander-body"><p>' . $output . '</p></div>';
+        }
 
-        $element[$delta] = array('#markup' => $output);
+        $element[$delta] = array(
+          '#markup' => $output
+        );
 
       }
       break;
@@ -362,10 +386,10 @@ function _text_expander_sanitize($instance, $langcode, $item, $column) {
  */
 function text_expander_field_widget_info() {
   return array(
-    'text_expander_textarea_with_label' => array(
-      'label' => t('Expanding text area with a label'),
+    'text_expander_textarea' => array(
+      'label' => t('Expanding text with label'),
       'field types' => array('text_expander_with_label'),
-      'settings' => array('rows' => 10, 'label_rows' => 3),//may have to adjust for textfield
+      'settings' => array('rows' => 5),
     ),
   );
 }
@@ -380,7 +404,7 @@ function text_expander_field_widget_settings_form($field, $instance) {
   $form['rows'] = array(
     '#type' => 'textfield',
     '#title' => t('Rows'),
-    '#default_value' => $settings['rows'],
+    '#default_value' => 5,
     '#required' => TRUE,
     '#element_validate' => array('element_validate_integer_positive'),
   );
@@ -397,14 +421,14 @@ function text_expander_field_widget_form(&$form, &$form_state, $field, $instance
 
   switch ($instance['widget']['type']) {
 
-    case 'text_expander_textarea_with_label':
+    case 'text_expander_textarea':
       $display = !empty($items[$delta]['label']) || !empty($instance['settings']['display_label']);
       $label_widget = array(
-        '#type' => $display ? 'textarea' : 'value',
+        '#type' => $display ? 'textfield' : 'value',
         '#default_value' => isset($items[$delta]['label']) ? $items[$delta]['label'] : NULL,
         '#title' => t('Label'),
-        '#rows' => $instance['widget']['settings']['label_rows'],
-        '#description' => t('Custom label for body text.'),
+        '#description' => t('Please add a label for the following content.'),
+        '#size' => 60,
         '#attached' => array(
           'js' => array(drupal_get_path('module', 'text_expander') . '/text_expander.js'),
         ),

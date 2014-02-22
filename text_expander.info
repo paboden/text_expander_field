@@ -1,8 +1,8 @@
-name = text expander
-description = Creates a new field type with an expanding textarea field with an optional label field.
-package = Core
-version = VERSION
+name = Text expander
+description = Creates a field type of an expanding textarea with an optional label textfield.
+package = Fields
 core = 7.x
+version = 7.x-1.0-beta1
 dependencies[] = field
 
 scripts[] = text_expander.js
