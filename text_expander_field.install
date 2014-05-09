@@ -8,10 +8,10 @@
 /**
  * Implements hook_field_schema().
  */
-function text_expander_field_schema($field) {
+function text_expander_field_field_schema($field) {
   switch ($field['type']) {
 
-    case 'text_expander_with_label':
+    case 'text_expander_field_with_label':
       $columns = array(
         'value' => array(
           'type' => 'text',
