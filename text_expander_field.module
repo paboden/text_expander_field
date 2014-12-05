@@ -38,33 +38,6 @@ function text_expander_field_field_info() {
 }
 
 /**
- * Implements hook_field_settings_form().
- */
-/*
-function text_expander_field_settings_form($field, $instance, $has_data) {
-  $settings = $field['settings'];
-
-  $form = array();
-
-  if ($field['type'] == 'text_expander_with_label') {
-    $form['label_max_length'] = array(
-      '#type' => 'textfield',
-      '#title' => t('Label maximum length'),
-      '#default_value' => $settings['max_length'],
-      '#required' => TRUE,
-      '#description' => t('The maximum length of the field in characters.'),
-      '#element_validate' => array('element_validate_integer_positive'),
-      // @todo: If $has_data, add a validate handler that only allows
-      // max_length to increase.
-      '#disabled' => $has_data,
-    );
-  }
-
-  return $form;
-}
-*/
-
-/**
  * Implements hook_field_instance_settings_form().
  */
 function text_expander_field_field_instance_settings_form($field, $instance) {
@@ -90,41 +63,6 @@ function text_expander_field_field_instance_settings_form($field, $instance) {
 
   return $form;
 }
-
-/**
- * Implements hook_field_validate().
- *
- * Possible error codes:
- * - 'text_expander_value_max_length': The value exceeds the maximum length.
- * - 'text_expander_label_max_length': The summary exceeds the maximum length.
- */
-/*
-function text_expander_field_validate($entity_type, $entity, $field, $instance, $langcode, $items, &$errors) {
-  foreach ($items as $delta => $item) {
-    // @todo Length is counted separately for summary and value, so the maximum
-    //   length can be exceeded very easily.
-    foreach (array('value', 'label') as $column) {
-      if (!empty($item[$column])) {
-        if (!empty($field['settings']['max_length']) && drupal_strlen($item[$column]) > $field['settings']['max_length']) {
-          switch ($column) {
-            case 'value':
-              $message = t('%name: the text may not be longer than %max characters.', array('%name' => $instance['label'], '%max' => $field['settings']['max_length']));
-              break;
-
-            case 'label':
-              $message = t('%name: the label may not be longer than %max characters.', array('%name' => $instance['label'], '%max' => $field['settings']['max_length']));
-              break;
-          }
-          $errors[$field['field_name']][$langcode][$delta][] = array(
-            'error' => "text_{$column}_length",
-            'message' => $message,
-          );
-        }
-      }
-    }
-  }
-}
-*/
 
 /**
  * Implements hook_field_load().
@@ -290,14 +228,14 @@ function text_expander_field_field_formatter_settings_summary($field, $instance,
 /**
  * Implements hook_field_formatter_view().
  */
-function text_expander_field_field_formatter_view($entity_type, $entity, $field, $instance, $langcode, $items, $display) {
+function text_expander_field_formatter_view($entity_type, $entity, $field, $instance, $langcode, $items, $display) {
   $element = array();
   static $delta = array();
   $settings = $display['settings'];
 
   switch ($display['type']) {
 
-    case 'text_expander_field_with_label':
+    case 'text_expander_with_label':
       foreach ($items as $delta => $item) {
         if (!empty($item['label']) && ($item['format'] == NULL)) {
           $label = '<div class="text-expander-label"><p>' . _text_expander_sanitize($instance, $langcode, $item, 'label') . '</p></div>';
@@ -320,11 +258,18 @@ function text_expander_field_field_formatter_view($entity_type, $entity, $field,
 
         $element[$delta] = array(
           '#markup' => $output,
+          '#attached' => array(
+            'js' => array(
+              drupal_get_path('module', 'text_expander') . '/text_expander.js' => array('type' => 'file', 'every_page' => TRUE),
+              libraries_get_path('jquery.expander') . '/jquery.expander.js' => array('type' => 'file'),
+              array('data' => array('textExpander' => array(0 => $settings)), 'type' => 'setting'),
+            ),
+          ),
         );
       }
       break;
 
-    case 'text_expander_field_no_label':
+    case 'text_expander_no_label':
       foreach ($items as $delta => $item) {
         $output = _text_expander_sanitize($instance, $langcode, $item, 'value');
         $output = text_summary($output, $instance['settings']['text_processing'] ? $item['format'] : NULL);
@@ -337,19 +282,20 @@ function text_expander_field_field_formatter_view($entity_type, $entity, $field,
         }
 
         $element[$delta] = array(
-          '#markup' => $output
+          '#markup' => $output,
+          '#attached' => array(
+            'js' => array(
+              drupal_get_path('module', 'text_expander') . '/text_expander.js' => array('type' => 'file', 'every_page' => TRUE),
+              libraries_get_path('jquery.expander') . '/jquery.expander.js' => array('type' => 'file'),
+              array('data' => array('textExpander' => array(0 => $settings)), 'type' => 'setting'),
+            ),
+          ),
         );
 
       }
       break;
 
   }
-
-  $element[$delta]['#attached']['js'] = array(
-    drupal_get_path('module', 'text_expander_field') . '/text_expander_field.js' => array('type' => 'file', 'every_page' => TRUE),
-    libraries_get_path('jquery.expander') . '/jquery.expander.js' => array('type' => 'file'),
-    array('data' => array('textExpander' => array($delta => $settings)), 'type' => 'setting'),
-  );
 
   return $element;
 }
@@ -372,7 +318,7 @@ function text_expander_field_field_formatter_view($entity_type, $entity, $field,
  * @return
  *  The sanitized string.
  */
-function _text_expander_field_sanitize($instance, $langcode, $item, $column) {
+function _text_expander_sanitize($instance, $langcode, $item, $column) {
   // If the value uses a cacheable text format, text_field_load() precomputes
   // the sanitized string.
   if (isset($item["safe_$column"])) {
